@@ -37,12 +37,15 @@ pub struct App {
     pub npc_pos : Vec<Vec<i32>>,
     pub npc_dir : Vec<Vec<i32>>,
     pub npc_hp : Vec<i32>,
+    pub npc_bleed : Vec<Vec<i32>>,
     pub npc_target_idx : Vec<usize>,
     
     pub npc_dir_idx : Vec<usize>,
     /// Event handler.
     pub events: EventHandler,
 
+    pub npc_Q_table : Vec<Vec<Vec<f32>>>,
+    pub total_rewards : Vec<f32>,
     pub npc_num : usize,
     pub npc_NN : Vec<Vec<Vec<Vec<f32>>>>,
     pub npc_armor_idx : Vec<usize>,
@@ -124,15 +127,25 @@ impl Default for App {
 		;npc_num ];
 	
 	
+	let mut npc_Q_table = vec![vec![vec![0.0 as f32;11];11];npc_num];
+	for n in 0..npc_num{
+	    for x in 0..11{
+		npc_Q_table[n][x][x]=1.0;
+	    }
+
+	}
         Self {
             running: true,
             counter: 0,
             seed : 1010,
             board_dim : vec![12,12],
+	    npc_Q_table : npc_Q_table,
+	    total_rewards : vec![0.0;npc_num],
 	    board_pop : vec![vec![0.0;12];12],
             npc_pos : vec![vec![2,2];npc_num],
             npc_dir : vec![vec![1,0];npc_num],
-            npc_hp : vec![10;npc_num],
+            npc_hp : vec![20;npc_num],
+	    npc_bleed: vec![vec![0;6];npc_num],
 	    armor_num : 1,
 	    npc_armor_idx : vec![0;npc_num],
 	    armor_str : vec!["Old Rags".to_string();npc_num],
@@ -185,7 +198,16 @@ impl Default for App {
 }
 
 impl App {
-    
+    //==============================================================
+    pub fn update_reward_table(&mut self, n:usize,state_init_idx:usize,state_next_idx:usize,action_idx:usize){
+	let alpha : f32 = 0.5;
+	let gamma : f32 = 0.5;
+	self.npc_Q_table[n][state_init_idx][action_idx] = (1.0-alpha)*self.npc_Q_table[n][state_init_idx][action_idx] +
+	    alpha*(self.total_rewards[n] + gamma*self.npc_Q_table[n][state_init_idx].iter()
+        .max_by(|x, y| x.abs().partial_cmp(&y.abs()).unwrap())
+        .unwrap());
+	
+    }
     //==============================================================
     pub fn tycoon_tick(&mut self){
 	
@@ -241,7 +263,7 @@ impl App {
 	let A:usize = self.arena_num;
 	let mut target_pos=vec![0,0];
 	let mut target_idx:usize=0;
-let mut v:Vec<i32>=vec![0,0];
+	let mut v:Vec<i32>=vec![0,0];
 	let mut dist:i32=0;
 	let mut bounce_flag:bool=false;
 	let mut attack_roll:i32=0;
@@ -265,164 +287,150 @@ let mut v:Vec<i32>=vec![0,0];
 	let mut new_fight_bool : bool = true;
 
 	if self.npc_owned_list.len()>=2{
-	/*
-	for n in 0..(self.npc_num){
-	    //self.npc_kill_sort[n]=n;
-	    argmax = n;
-	    for m in n..self.npc_num{
-		if self.npc_kill_count[m]>self.npc_kill_count[argmax]{
-		    argmax=m;
-		}
-	    }
-	    self.npc_kill_sort[argmax] = self.npc_kill_sort[n];
-	    self.npc_kill_sort[n]=argmax;
-    }
-	*/
-	//self.get_pop_stats();	
 	self.tycoon_check_new_fight(); 
 	self.find_best_npc();
 	
 	 
-	    self.npc_target_idx[self.tycoon_arena[0]]=self.tycoon_arena[1];
-	    self.npc_target_idx[self.tycoon_arena[1]]=self.tycoon_arena[0];
+	self.npc_target_idx[self.tycoon_arena[0]]=self.tycoon_arena[1];
+	self.npc_target_idx[self.tycoon_arena[1]]=self.tycoon_arena[0];
 
-	    
-	    self.board_pop=vec![vec![0.0;self.tycoon_arena_dim[1] as usize];self.tycoon_arena_dim[0] as usize];
-	    for n in self.tycoon_arena.clone(){
-		self.board_pop[self.npc_pos[n][0] as usize][self.npc_pos[n][1] as usize]=1.0;
-	    }
+
+	self.board_pop=vec![vec![0.0;self.tycoon_arena_dim[1] as usize];self.tycoon_arena_dim[0] as usize];
+	for n in self.tycoon_arena.clone(){
+	    self.board_pop[self.npc_pos[n][0] as usize][self.npc_pos[n][1] as usize]=1.0;
+	}
 	for n in self.tycoon_arena.clone(){//loop through all npcs
 	nn_data=vec![0.0;40];
-        if(self.npc_hp[n]>0){//if the npc is alive
-                
-        bounce_flag=false;
-	//==================================Check Bounce
-	arg_min_dist=0;
-	min_dist=10000;
-        for m in self.tycoon_arena.clone(){
-            dist=(self.npc_pos[m][0]-self.npc_pos[n][0]).pow(2)+
-			(self.npc_pos[m][1]-self.npc_pos[n][1]).pow(2);
-		    if dist<min_dist && m != n{
-			    min_dist=dist;
-			    arg_min_dist=m;
-		    }
-            if(dist==0 && m != n){
-                bounce_flag=true;
-                    break;
-            }
-        }
-		
-		//self.npc_target_idx[n]=arg_min_dist;
+	if(self.npc_hp[n]>0){//if the npc is alive
 
-		target_idx=self.npc_target_idx[n];
-		target_pos[0]=self.npc_pos[target_idx][0];
-		target_pos[1]=self.npc_pos[target_idx][1];
-					//Neural Net For Movement
-
-
-		x=self.npc_pos[n][1]*target_pos[0]
-		-self.npc_pos[n][0]*target_pos[1];
-
-
-		nn_data[0]=(self.npc_pos[n][0] - target_pos[0]) as f32;
-		nn_data[1]=(self.npc_pos[n][1] - target_pos[1]) as f32;
-		nn_data[18]=nn_data[0].powf(2.0) + nn_data[1].powf(2.0);
-
-		v[0]=(self.npc_pos[n][0]+1)%self.tycoon_arena_dim[0];
-		v[1]=(self.npc_pos[n][1]+0)%self.tycoon_arena_dim[1];
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[2]=1.0;
-		}else{
-		    nn_data[2]=0.0;
+	    bounce_flag=false;
+	    //==================================ce
+	    arg_min_dist=0;
+	    min_dist=10000;
+	    for m in self.tycoon_arena.clone(){
+		dist=(self.npc_pos[m][0]-self.npc_pos[n][0]).pow(2)+
+			    (self.npc_pos[m][1]-self.npc_pos[n][1]).pow(2);
+			if dist<min_dist && m != n{
+				min_dist=dist;
+				arg_min_dist=m;
+			}
+		if(dist==0 && m != n){
+		    bounce_flag=true;
+			break;
 		}
-		
-	
-		v[0]=(self.npc_pos[n][0]+1)%self.tycoon_arena_dim[0];
-		v[1]=(self.npc_pos[n][1]+1)%self.tycoon_arena_dim[1];
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[3]=1.0;
-		}else{
-		    nn_data[3]=0.0;
-		}
-	
+	    }
 
-		v[0]=(self.npc_pos[n][0]+1)%self.tycoon_arena_dim[0];
-		v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.tycoon_arena_dim[1]);
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[4]=1.0;
-		}else{
-		    nn_data[4]=0.0;
-		}
-		
+	    //self.npc_target_idx[n]=arg_min_dist;
 
-		v[0]=(self.npc_pos[n][0]+0)%self.tycoon_arena_dim[0];
-		v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.tycoon_arena_dim[1]);
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[5]=1.0;
-		}else{
-		    nn_data[5]=0.0;
-		}
+	    target_idx=self.npc_target_idx[n];
+	    target_pos[0]=self.npc_pos[target_idx][0];
+	    target_pos[1]=self.npc_pos[target_idx][1];
+				    //Neural Net For Movement
 
 
-		v[0]=App::brute_modulo(self.npc_pos[n][0]-1,self.tycoon_arena_dim[0]);
-		v[1]=(self.npc_pos[n][1]+1)%self.tycoon_arena_dim[1];
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[6]=1.0;
-		}else{
-		    nn_data[6]=0.0;
-		}
-
-		v[0]=App::brute_modulo(self.npc_pos[n][0]-1,self.tycoon_arena_dim[0]);
-		v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.tycoon_arena_dim[1]);
-
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[7]=1.0;
-		}else{
-		    nn_data[7]=0.0;
-		}
+	    x=self.npc_pos[n][1]*target_pos[0]
+	    -self.npc_pos[n][0]*target_pos[1];
 
 
-		v[0]=(self.npc_pos[n][0]+0)%self.tycoon_arena_dim[0];
-		v[1]=(self.npc_pos[n][1]+1)%self.tycoon_arena_dim[1];
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[8]=1.0;
-		}else{
-		    nn_data[8]=0.0;
-		}
+	    nn_data[0]=(self.npc_pos[n][0] - target_pos[0]) as f32;
+	    nn_data[1]=(self.npc_pos[n][1] - target_pos[1]) as f32;
+	    nn_data[18]=nn_data[0].powf(2.0) + nn_data[1].powf(2.0);
+
+	    v[0]=(self.npc_pos[n][0]+1)%self.tycoon_arena_dim[0];
+	    v[1]=(self.npc_pos[n][1]+0)%self.tycoon_arena_dim[1];
+	    if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+		nn_data[2]=1.0;
+	    }else{
+		nn_data[2]=0.0;
+	    }
 
 
-		v[0]=(self.npc_pos[n][0]+0)%self.tycoon_arena_dim[0];
-		v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.tycoon_arena_dim[1]);
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[9]=1.0;
-		}else{
-		    nn_data[9]=0.0;
-		}
+	    v[0]=(self.npc_pos[n][0]+1)%self.tycoon_arena_dim[0];
+	    v[1]=(self.npc_pos[n][1]+1)%self.tycoon_arena_dim[1];
+	    if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+		nn_data[3]=1.0;
+	    }else{
+		nn_data[3]=0.0;
+	    }
 
-		nn_data[10]=0.0;
-		nn_data[11]=0.0;
-		nn_data[12]=0.0;
-		nn_data[13]=0.0;
-		nn_data[14]=0.0;
-		nn_data[15]=0.0;
-		nn_data[16]=0.0;
-		nn_data[17]=0.0;
 
-		nn_data[self.npc_dir_idx[n] +10]=1.0;
+	    v[0]=(self.npc_pos[n][0]+1)%self.tycoon_arena_dim[0];
+	    v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.tycoon_arena_dim[1]);
+	    if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+		nn_data[4]=1.0;
+	    }else{
+		nn_data[4]=0.0;
+	    }
 
-	    
-		nn_data[19]=0.0;
-		nn_data[20]=0.0;
-		nn_data[21]=0.0;
-		nn_data[22]=0.0;
-		nn_data[23]=0.0;
-		nn_data[24]=0.0;
-		nn_data[25]=0.0;
-		nn_data[26]=0.0;
 
-		nn_data[self.npc_dir_idx[target_idx] +19]=1.0;
+	    v[0]=(self.npc_pos[n][0]+0)%self.tycoon_arena_dim[0];
+	    v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.tycoon_arena_dim[1]);
+	    if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+		nn_data[5]=1.0;
+	    }else{
+		nn_data[5]=0.0;
+	    }
 
-	        nn_data[27] = self.npc_hp[n] as f32;
+
+	    v[0]=App::brute_modulo(self.npc_pos[n][0]-1,self.tycoon_arena_dim[0]);
+	    v[1]=(self.npc_pos[n][1]+1)%self.tycoon_arena_dim[1];
+	    if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+		nn_data[6]=1.0;
+	    }else{
+		nn_data[6]=0.0;
+	    }
+
+	    v[0]=App::brute_modulo(self.npc_pos[n][0]-1,self.tycoon_arena_dim[0]);
+	    v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.tycoon_arena_dim[1]);
+
+	    if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+		nn_data[7]=1.0;
+	    }else{
+		nn_data[7]=0.0;
+	    }
+
+
+	    v[0]=(self.npc_pos[n][0]+0)%self.tycoon_arena_dim[0];
+	    v[1]=(self.npc_pos[n][1]+1)%self.tycoon_arena_dim[1];
+	    if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+		nn_data[8]=1.0;
+	    }else{
+		nn_data[8]=0.0;
+	    }
+
+
+	    v[0]=(self.npc_pos[n][0]+0)%self.tycoon_arena_dim[0];
+	    v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.tycoon_arena_dim[1]);
+	    if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+		nn_data[9]=1.0;
+	    }else{
+		nn_data[9]=0.0;
+	    }
+
+	    nn_data[10]=0.0;
+	    nn_data[11]=0.0;
+	    nn_data[12]=0.0;
+	    nn_data[13]=0.0;
+	    nn_data[14]=0.0;
+	    nn_data[15]=0.0;
+	    nn_data[16]=0.0;
+	    nn_data[17]=0.0;
+
+	    nn_data[self.npc_dir_idx[n] +10]=1.0;
+
+
+	    nn_data[19]=0.0;
+	    nn_data[20]=0.0;
+	    nn_data[21]=0.0;
+	    nn_data[22]=0.0;
+	    nn_data[23]=0.0;
+	    nn_data[24]=0.0;
+	    nn_data[25]=0.0;
+	    nn_data[26]=0.0;
+
+	    nn_data[self.npc_dir_idx[target_idx] +19]=1.0;
+
+	    nn_data[27] = self.npc_hp[n] as f32;
 	    nn_data[28] = self.npc_hp[target_idx] as f32;
 
 	    nn_data[29] = self.old_output[n][0];
@@ -436,123 +444,125 @@ let mut v:Vec<i32>=vec![0,0];
 	    nn_data[37] = self.old_output[n][8];
 	    nn_data[38] = self.old_output[n][9];
 	    nn_data[39] = self.old_output[n][10];
-		//START FEED FORWARD
+	    //START FEED FORWARD
 
-	    //====================================================================
-		for layer in self.npc_NN[n].clone(){
-		    nn_data=self.feed_forward(layer,nn_data);
-		    nn_data=App::relu(nn_data)
+	//====================================================================
+	    for layer in self.npc_NN[n].clone(){
+		nn_data=self.feed_forward(layer,nn_data);
+		nn_data=App::relu(nn_data)
+	    }
+
+
+
+
+	    nn_out_argmax=9;
+	    move_flag=false;
+	    for m in 0..nn_data.len() as usize{
+		if nn_data[m]>=nn_data[nn_out_argmax] && nn_data[m]>0.0{
+		    nn_out_argmax=m;
+		    move_flag=true;
+		}
+		self.old_output[n][m]=nn_data[m];
+	    }
+
+	//====================================================================
+	    if move_flag{
+		if nn_out_argmax==9{
+		    //turn counter clock wise
+		    self.npc_dir_idx[n]+=1;
+		    self.npc_dir_idx[n]%=7;
+		    self.npc_dir[n][0]=turn_list[self.npc_dir_idx[n]][0];
+		    self.npc_dir[n][1]=turn_list[self.npc_dir_idx[n]][1];
+
+		}else if nn_out_argmax==8{
+		    //turn clockwise
+		    if self.npc_dir_idx[n]==0 {
+			self.npc_dir_idx[n]=7;
+		    }else{
+			self.npc_dir_idx[n]-=1;
+		    }
+		    self.npc_dir[n][0]=turn_list[self.npc_dir_idx[n]][0];
+		    self.npc_dir[n][1]=turn_list[self.npc_dir_idx[n]][1]; 
 		}
 
+		if nn_out_argmax==0{
+		    self.npc_pos[n][0]+=1;
+		    self.npc_pos[n][1]+=0;
+		}else if nn_out_argmax==1{
+		    self.npc_pos[n][0]+=1;
+		    self.npc_pos[n][1]+=1;
+
+		}else if nn_out_argmax==2{
+		    self.npc_pos[n][0]+=1;
+		    self.npc_pos[n][1]+=-1;
+
+		}else if nn_out_argmax==3{
+		    self.npc_pos[n][0]+=0;
+		    self.npc_pos[n][1]+=1;
+
+		}else if nn_out_argmax==4{
+		    self.npc_pos[n][0]+=0;
+		    self.npc_pos[n][1]+=-1;
+
+		}else if nn_out_argmax==5{
+		    self.npc_pos[n][0]+=-1;
+		    self.npc_pos[n][1]+=1;
+
+		}else if nn_out_argmax==6{
+		    self.npc_pos[n][0]+=-1;
+		    self.npc_pos[n][1]+=0;
+
+		}else if nn_out_argmax==7{
+		    self.npc_pos[n][0]+=-1;
+		    self.npc_pos[n][1]+=-1;
+
+		}
+
+		if nn_out_argmax==10{
+		    self.npc_max_acc[n]=(20-self.armor_AC[self.npc_armor_idx[n]])/2;
+		    self.npc_speed[n][self.npc_dir_idx[n]]+= self.npc_max_acc[n];
+		}
+	    }
+	    for k in 0..7{
+		self.npc_pos[n][0]+=turn_list[k][0]*self.npc_speed[n][k];
+		self.npc_pos[n][1]+=turn_list[k][1]*self.npc_speed[n][k];
+		if self.npc_speed[n][k]>0{
+		    self.npc_speed[n][k]-=1;
+		}
+	    }
+
+
+	    if bounce_flag{
+		//self.counter=((self.counter+self.seed)%7919);
+		self.npc_pos[n][0]+=rng.gen_range(-1..1);
+		self.npc_hp[n]-=1;
+		//self.counter=((self.counter+self.seed)%7919);
+		self.npc_pos[n][1]+=rng.gen_range(-1..1);
+	    }
+	    if self.npc_pos[n][0]>=self.tycoon_arena_dim[0]-1{
+		self.npc_pos[n][0]=self.tycoon_arena_dim[0]-2;
+	    }
+	    if self.npc_pos[n][0]<1{
+		self.npc_pos[n][0]=2;
+	    }
+	    if self.npc_pos[n][1]>=self.tycoon_arena_dim[1]-1{
+		self.npc_pos[n][1]=self.tycoon_arena_dim[1]-2;
+	    }
+	    if self.npc_pos[n][1]<1{
+		self.npc_pos[n][1]=2;
+	    }
+	    dist=(self.npc_pos[n][0]-target_pos[0]).pow(2)+
+		(self.npc_pos[n][1]-target_pos[1]).pow(2);
+
+	    //println!("CALLING ATTACK FUNCTION");
+	    self.attack(n,target_idx);
+	    self.npc_ticks_alive[n]+=1;
+
+	    if self.npc_ticks_alive[n]>100{
+		self.npc_hp[n]-=1;
+	    }
 	    
-	    
-		nn_out_argmax=9;
-		move_flag=false;
-		for m in 0..nn_data.len() as usize{
-		    if nn_data[m]>=nn_data[nn_out_argmax] && nn_data[m]>0.0{
-			nn_out_argmax=m;
-			move_flag=true;
-		    }
-		   self.old_output[n][m]=nn_data[m];
-		}
-	    
-	    //====================================================================
-		if move_flag{
-		    if nn_out_argmax==9{
-			//turn counter clock wise
-			self.npc_dir_idx[n]+=1;
-			self.npc_dir_idx[n]%=7;
-			self.npc_dir[n][0]=turn_list[self.npc_dir_idx[n]][0];
-			self.npc_dir[n][1]=turn_list[self.npc_dir_idx[n]][1];
-
-		    }else if nn_out_argmax==8{
-			//turn clockwise
-			if self.npc_dir_idx[n]==0 {
-			    self.npc_dir_idx[n]=7;
-			}else{
-			    self.npc_dir_idx[n]-=1;
-			}
-			self.npc_dir[n][0]=turn_list[self.npc_dir_idx[n]][0];
-			self.npc_dir[n][1]=turn_list[self.npc_dir_idx[n]][1]; 
-		    }
-
-		    if nn_out_argmax==0{
-			self.npc_pos[n][0]+=1;
-			self.npc_pos[n][1]+=0;
-		    }else if nn_out_argmax==1{
-			self.npc_pos[n][0]+=1;
-			self.npc_pos[n][1]+=1;
-
-		    }else if nn_out_argmax==2{
-			self.npc_pos[n][0]+=1;
-			self.npc_pos[n][1]+=-1;
-
-		    }else if nn_out_argmax==3{
-			self.npc_pos[n][0]+=0;
-			self.npc_pos[n][1]+=1;
-
-		    }else if nn_out_argmax==4{
-			self.npc_pos[n][0]+=0;
-			self.npc_pos[n][1]+=-1;
-
-		    }else if nn_out_argmax==5{
-			self.npc_pos[n][0]+=-1;
-			self.npc_pos[n][1]+=1;
-
-		    }else if nn_out_argmax==6{
-			self.npc_pos[n][0]+=-1;
-			self.npc_pos[n][1]+=0;
-
-		    }else if nn_out_argmax==7{
-			self.npc_pos[n][0]+=-1;
-			self.npc_pos[n][1]+=-1;
-
-		    }
-
-		    if nn_out_argmax==10{
-			self.npc_max_acc[n]=(20-self.armor_AC[self.npc_armor_idx[n]])/2;
-			self.npc_speed[n][self.npc_dir_idx[n]]+= self.npc_max_acc[n];
-		    }
-		}
-		for k in 0..7{
-		    self.npc_pos[n][0]+=turn_list[k][0]*self.npc_speed[n][k];
-		    self.npc_pos[n][1]+=turn_list[k][1]*self.npc_speed[n][k];
-		    if self.npc_speed[n][k]>0{
-			self.npc_speed[n][k]-=1;
-		    }
-		}
-
-		
-		if bounce_flag{
-		    //self.counter=((self.counter+self.seed)%7919);
-                    self.npc_pos[n][0]+=rng.gen_range(-1..1);
-		    self.npc_hp[n]-=1;
-                    //self.counter=((self.counter+self.seed)%7919);
-                    self.npc_pos[n][1]+=rng.gen_range(-1..1);
-		}
-		if self.npc_pos[n][0]>=self.tycoon_arena_dim[0]-1{
-		    self.npc_pos[n][0]=self.tycoon_arena_dim[0]-2;
-		}
-		if self.npc_pos[n][0]<1{
-		    self.npc_pos[n][0]=2;
-		}
-		if self.npc_pos[n][1]>=self.tycoon_arena_dim[1]-1{
-		    self.npc_pos[n][1]=self.tycoon_arena_dim[1]-2;
-		}
-		if self.npc_pos[n][1]<1{
-		    self.npc_pos[n][1]=2;
-		}
-                dist=(self.npc_pos[n][0]-target_pos[0]).pow(2)+
-                    (self.npc_pos[n][1]-target_pos[1]).pow(2);
-
-	        //println!("CALLING ATTACK FUNCTION");
-	        self.attack(n,target_idx);
-                self.npc_ticks_alive[n]+=1;
-
-		if self.npc_ticks_alive[n]>100{
-		    self.npc_hp[n]-=1;
-		}
-            }
+	}
         }//MAIN LOOP
         }
     }
@@ -711,11 +721,15 @@ let mut v:Vec<i32>=vec![0,0];
 	self.npc_name[target_idx]=name;
     }
     //===================================================
-    pub fn attack(&mut self,attacker:usize,defender:usize){
+    pub fn reward(&mut self,n:usize,c:f32){
+	self.total_rewards[n]+=c;
+    }
+    pub fn attack(&mut self,attacker:usize,defender:usize){//function handles attacking
 	let n = attacker;
 	let target_idx = defender;
 	let target_pos = vec![self.npc_pos[target_idx][0],self.npc_pos[target_idx][1]];
 	let mut attack_roll : i32 = 0;
+	let mut bleed_roll : i32 = 0;
 	let dice = &self.weapon_die[self.npc_weapon_idx[n]];
 	let mut rng = rand::thread_rng();
 	//===========================
@@ -732,9 +746,15 @@ let mut v:Vec<i32>=vec![0,0];
 		    attack_roll+=rng.gen_range(1..dice[1])
 		}
 	    }
+
+	    
 	    self.npc_maim_count[n]+=attack_roll;
+	    self.reward(n,attack_roll as f32);
 	    self.npc_hp[target_idx]-=attack_roll;
 	    if self.npc_hp[target_idx]<=0{//THIS IS THE CODE FOR IF A KILL IS SCORED
+
+		self.reward(attacker,3.0*attack_roll as f32);
+		
 		self.npc_NN[target_idx]=self.npc_NN[n].clone();
 		self.npc_kill_count[n]+=1;
 		self.npc_max_hp[target_idx]=self.npc_max_hp[n];
@@ -822,11 +842,11 @@ let mut v:Vec<i32>=vec![0,0];
 	    }
 	}
 	if new_fight_bool {
-	    self.npc_hp[self.tycoon_arena[0]]=10;
+	    self.npc_hp[self.tycoon_arena[0]]=20;
 	    //self.npc_kill_count[self.arenas[a][0]]=0;
 	    self.npc_ticks_alive[self.tycoon_arena[0]]=0;
 
-	    self.npc_hp[self.tycoon_arena[1]]=10;
+	    self.npc_hp[self.tycoon_arena[1]]=20;
 	    //self.npc_kill_count[self.arenas[a][1]]=0;
 	    self.npc_ticks_alive[self.tycoon_arena[1]]=0;
 
@@ -838,9 +858,7 @@ let mut v:Vec<i32>=vec![0,0];
 	    self.npc_target_idx[self.tycoon_arena[1]]=self.tycoon_arena[0];
 
 	    self.npc_max_hp[self.tycoon_arena[0]]=10;
-	    self.npc_hp[self.tycoon_arena[0]]=10;
 	    self.npc_max_hp[self.tycoon_arena[1]]=10;
-	    self.npc_hp[self.tycoon_arena[1]]=10;
 
 
 	    }
@@ -886,6 +904,11 @@ let mut v:Vec<i32>=vec![0,0];
 			    self.npc_weapon_idx[self.arenas[a][0]]=rng.gen_range(0..self.weapon_num);
 			    self.npc_armor_idx[self.arenas[a][1]]=rng.gen_range(0..self.armor_num);
 			}
+
+			self.npc_Q_table[rand_usize]=vec![vec![0.0;11];11];
+			for x in 0..11{
+			    self.npc_Q_table[rand_usize][x][x]=1.0;
+			}
 			break;
 		    }
 		}
@@ -918,16 +941,22 @@ let mut v:Vec<i32>=vec![0,0];
 			    self.npc_armor_idx[self.arenas[a][1]]=rng.gen_range(0..self.armor_num);
 			}
 
+			
+			self.npc_Q_table[rand_usize]=vec![vec![0.0;11];11];
+			for x in 0..11{
+			    self.npc_Q_table[rand_usize][x][x]=1.0;
+			}
+
 			break;
 		    }
 		}
 	    }
 	    if new_fight_bool {
-		self.npc_hp[self.arenas[a][0]]=10;
+		self.npc_hp[self.arenas[a][0]]=20;
 		//self.npc_kill_count[self.arenas[a][0]]=0;
 		self.npc_ticks_alive[self.arenas[a][0]]=0;
 
-		self.npc_hp[self.arenas[a][1]]=10;
+		self.npc_hp[self.arenas[a][1]]=20;
 		//self.npc_kill_count[self.arenas[a][1]]=0;
 		self.npc_ticks_alive[self.arenas[a][1]]=0;
 
@@ -939,9 +968,7 @@ let mut v:Vec<i32>=vec![0,0];
 		self.npc_target_idx[self.arenas[a][1]]=self.arenas[a][0];
 
 		self.npc_max_hp[self.arenas[a][0]]=10;
-		self.npc_hp[self.arenas[a][0]]=10;
 		self.npc_max_hp[self.arenas[a][1]]=10;
-		self.npc_hp[self.arenas[a][1]]=10;
 
 
 		}
@@ -1163,7 +1190,8 @@ let mut v:Vec<i32>=vec![0,0];
             M=Network[k][n].len() as usize;
             for m in 0..M{
                 //entry+=random float
-                out_net[k][n][m]+=rng.gen_range(-0.1..0.1); 
+                out_net[k][n][m]+=rng.gen_range(-0.1..0.1);
+	
             }
             }
         }
@@ -1198,6 +1226,15 @@ let mut v:Vec<i32>=vec![0,0];
             }
         }
         C
+    }
+
+    pub fn finite_linear_map(&mut self,A:Vec<Vec<f32>>,x:Vec<f32>) -> Vec<f32>{
+	let mut b = vec![0 as f32;A.len()];
+	for n in 0..b.len(){
+	    b[n]=self.dot_product(A[n].clone(),x.clone());
+	}
+
+	b
     }
 
     pub fn dot_product(&mut self,u:Vec<f32>,v:Vec<f32>) -> f32{
@@ -1265,6 +1302,158 @@ let mut v:Vec<i32>=vec![0,0];
     ///
     /// The tick event is where you can update the state of your application with any logic that
     /// needs to be updated at a fixed frame rate. E.g. polling a server, updating an animation.
+    pub fn pass_to_Q(&mut self,n:usize,data:Vec<f32>) -> Vec<f32>{
+	let Q_T=self.transpose(self.npc_Q_table[n].clone());
+	self.finite_linear_map(Q_T.clone(),data)
+    }
+    pub fn pass_to_NN(&mut self, n : usize) -> Vec<f32>{
+	let mut nn_data=vec![0.0;40];
+	let mut target_pos=vec![0,0];
+	let mut target_idx:usize=0;
+
+	let mut v:Vec<i32>=vec![0,0];
+
+
+	//self.npc_target_idx[n]=arg_min_dist;
+
+	target_idx=self.npc_target_idx[n];
+	target_pos[0]=self.npc_pos[target_idx][0];
+	target_pos[1]=self.npc_pos[target_idx][1];
+				//Neural Net For Movement
+
+
+
+	    //nn_data is a 11 entry long vector of f32 values that serves as
+	    //the input and output variable for the neural network
+	nn_data[0]=(self.npc_pos[n][0] - target_pos[0]) as f32;
+	nn_data[1]=(self.npc_pos[n][1] - target_pos[1]) as f32;
+	nn_data[18]=nn_data[0].powf(2.0) + nn_data[1].powf(2.0);
+
+	v[0]=(self.npc_pos[n][0]+1)%self.board_dim[0];
+	v[1]=(self.npc_pos[n][1]+0)%self.board_dim[1];
+	if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+	    nn_data[2]=1.0;
+	}else{
+	    nn_data[2]=0.0;
+	}
+
+
+	v[0]=(self.npc_pos[n][0]+1)%self.board_dim[0];
+	v[1]=(self.npc_pos[n][1]+1)%self.board_dim[1];
+	if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+	    nn_data[3]=1.0;
+	}else{
+	    nn_data[3]=0.0;
+	}
+
+
+	v[0]=(self.npc_pos[n][0]+1)%self.board_dim[0];
+	v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.board_dim[1]);
+	if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+	    nn_data[4]=1.0;
+	}else{
+	    nn_data[4]=0.0;
+	}
+
+
+	v[0]=(self.npc_pos[n][0]+0)%self.board_dim[0];
+	v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.board_dim[1]);
+	if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+	    nn_data[5]=1.0;
+	}else{
+	    nn_data[5]=0.0;
+	}
+
+
+	v[0]=App::brute_modulo(self.npc_pos[n][0]-1,self.board_dim[0]);
+	v[1]=(self.npc_pos[n][1]+1)%self.board_dim[1];
+	if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+	    nn_data[6]=1.0;
+	}else{
+	    nn_data[6]=0.0;
+	}
+
+	v[0]=App::brute_modulo(self.npc_pos[n][0]-1,self.board_dim[0]);
+	v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.board_dim[1]);
+
+	if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+	    nn_data[7]=1.0;
+	}else{
+	    nn_data[7]=0.0;
+	}
+
+
+	v[0]=(self.npc_pos[n][0]+0)%self.board_dim[0];
+	v[1]=(self.npc_pos[n][1]+1)%self.board_dim[1];
+	if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+	    nn_data[8]=1.0;
+	}else{
+	    nn_data[8]=0.0;
+	}
+
+
+	v[0]=(self.npc_pos[n][0]+0)%self.board_dim[0];
+	v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.board_dim[1]);
+	if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
+	    nn_data[9]=1.0;
+	}else{
+	    nn_data[9]=0.0;
+	}
+
+	nn_data[10]=0.0;
+	nn_data[11]=0.0;
+	nn_data[12]=0.0;
+	nn_data[13]=0.0;
+	nn_data[14]=0.0;
+	nn_data[15]=0.0;
+	nn_data[16]=0.0;
+	nn_data[17]=0.0;
+
+	nn_data[self.npc_dir_idx[n] +10]=1.0;
+
+
+	nn_data[19]=0.0;
+	nn_data[20]=0.0;
+	nn_data[21]=0.0;
+	nn_data[22]=0.0;
+	nn_data[23]=0.0;
+	nn_data[24]=0.0;
+	nn_data[25]=0.0;
+	nn_data[26]=0.0;
+
+	nn_data[self.npc_dir_idx[target_idx] +19]=1.0;
+
+	nn_data[27] = self.npc_hp[n] as f32;
+	nn_data[28] = self.npc_hp[target_idx] as f32;
+
+	nn_data[29] = self.old_output[n][0];
+	nn_data[30] = self.old_output[n][1];
+	nn_data[31] = self.old_output[n][2];
+	nn_data[32] = self.old_output[n][3];
+	nn_data[33] = self.old_output[n][4];
+	nn_data[34] = self.old_output[n][5];
+	nn_data[35] = self.old_output[n][6];
+	nn_data[36] = self.old_output[n][7];
+	nn_data[37] = self.old_output[n][8];
+	nn_data[38] = self.old_output[n][9];
+	nn_data[39] = self.old_output[n][10];
+	    //START FEED FORWARD
+
+	    //FORWARD NN_DATA INTO MACHINE LEARNING ALGORITHM
+	//====================================================================
+	for layer in self.npc_NN[n].clone(){
+	    nn_data=self.feed_forward(layer,nn_data);
+	    nn_data=App::relu(nn_data)
+	}
+
+
+
+	nn_data
+
+		       
+    }
+
+		   
     pub fn tick(&mut self) {
     let mut rng=rand::thread_rng();
 	//self.counter=self.counter.saturating_add(1)
@@ -1273,14 +1462,17 @@ let mut v:Vec<i32>=vec![0,0];
     let mut target_pos=vec![0,0];
     let mut target_idx:usize=0;
     let mut v:Vec<i32>=vec![0,0];
-    let mut dist:i32=0;
+    let mut dist : f32 = 0.0;
     let mut bounce_flag:bool=false;
     let mut attack_roll:i32=0;
     let mut dir:Vec<i32> = vec![0,0];
     let mut x:i32 = 0;
 
-    let mut nn_data:Vec<f32>=vec![0.0;40];
-    let mut nn_out_argmax = 0 as usize;
+	let mut nn_data:Vec<f32>=vec![0.0;40];
+	let mut old_data:Vec<f32>=Vec::new();
+	let mut old_argmax = 0 as usize;
+	let mut action_idx=0 as usize;
+let mut nn_out_argmax = 0 as usize;
     let mut move_flag :bool = false;
     let turn_list:Vec<Vec<i32>> = vec![vec![1,0],
                     vec![1, 1],
@@ -1291,10 +1483,14 @@ let mut v:Vec<i32>=vec![0,0];
                     vec![0, -1],
                     vec![1, -1]];
     let mut arg_min_dist = 0 as usize;
-    let mut min_dist = 10000 as i32;
+	let mut min_dist = 10000.0 as f32;
+	let mut new_min_dist = 10000.0 as f32;
     let mut rand_usize : usize = 0 as usize;
 	let mut new_fight_bool : bool = true;
 	
+	//=================================================================
+	//Reset Rewards
+	self.total_rewards=vec![0.0;self.npc_num];
 	
     //================================================================
 	if self.main_menu_mode{
@@ -1325,282 +1521,196 @@ let mut v:Vec<i32>=vec![0,0];
 
     //================================================================
 	if self.sim_mode {
-	self.get_pop_stats();	
-	self.check_new_fight(); 
-	self.find_best_npc();
-	for a in 0..A {
-	    self.npc_target_idx[self.arenas[a][0]]=self.arenas[a][1];
-	    self.npc_target_idx[self.arenas[a][1]]=self.arenas[a][0];
-
-	    
-	    self.board_pop=vec![vec![0.0;self.board_dim[1] as usize];self.board_dim[0] as usize];
-	    for n in self.arenas[a].clone(){
-		self.board_pop[self.npc_pos[n][0] as usize][self.npc_pos[n][1] as usize]=1.0;
-	    }
-	for n in self.arenas[a].clone(){//loop through all npcs
-	nn_data=vec![0.0;40];
-        if(self.npc_hp[n]>0){//if the npc is alive
-                
-        bounce_flag=false;
-	//==================================Check Bounce
-	arg_min_dist=0;
-	min_dist=10000;
-        for m in self.arenas[a].clone(){
-            dist=(self.npc_pos[m][0]-self.npc_pos[n][0]).pow(2)+
-			(self.npc_pos[m][1]-self.npc_pos[n][1]).pow(2);
-		    if dist<min_dist && m != n{
-			    min_dist=dist;
-			    arg_min_dist=m;
-		    }
-            if(dist==0 && m != n){
-                bounce_flag=true;
-                    break;
-            }
-        }
-		
-		//self.npc_target_idx[n]=arg_min_dist;
-
-		target_idx=self.npc_target_idx[n];
-		target_pos[0]=self.npc_pos[target_idx][0];
-		target_pos[1]=self.npc_pos[target_idx][1];
-					//Neural Net For Movement
+	    self.get_pop_stats();	
+	    self.check_new_fight(); 
+	    self.find_best_npc();
+	    for a in 0..A {
+		self.npc_target_idx[self.arenas[a][0]]=self.arenas[a][1];
+		self.npc_target_idx[self.arenas[a][1]]=self.arenas[a][0];
 
 
-		x=self.npc_pos[n][1]*target_pos[0]
-		-self.npc_pos[n][0]*target_pos[1];
-
-
-		nn_data[0]=(self.npc_pos[n][0] - target_pos[0]) as f32;
-		nn_data[1]=(self.npc_pos[n][1] - target_pos[1]) as f32;
-		nn_data[18]=nn_data[0].powf(2.0) + nn_data[1].powf(2.0);
-
-		v[0]=(self.npc_pos[n][0]+1)%self.board_dim[0];
-		v[1]=(self.npc_pos[n][1]+0)%self.board_dim[1];
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[2]=1.0;
-		}else{
-		    nn_data[2]=0.0;
-		}
-		
+		self.board_pop=vec![vec![0.0;self.board_dim[1] as usize];self.board_dim[0] as usize];
 	
-		v[0]=(self.npc_pos[n][0]+1)%self.board_dim[0];
-		v[1]=(self.npc_pos[n][1]+1)%self.board_dim[1];
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[3]=1.0;
-		}else{
-		    nn_data[3]=0.0;
-		}
-	
-
-		v[0]=(self.npc_pos[n][0]+1)%self.board_dim[0];
-		v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.board_dim[1]);
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[4]=1.0;
-		}else{
-		    nn_data[4]=0.0;
-		}
-		
-
-		v[0]=(self.npc_pos[n][0]+0)%self.board_dim[0];
-		v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.board_dim[1]);
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[5]=1.0;
-		}else{
-		    nn_data[5]=0.0;
-		}
-
-
-		v[0]=App::brute_modulo(self.npc_pos[n][0]-1,self.board_dim[0]);
-		v[1]=(self.npc_pos[n][1]+1)%self.board_dim[1];
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[6]=1.0;
-		}else{
-		    nn_data[6]=0.0;
-		}
-
-		v[0]=App::brute_modulo(self.npc_pos[n][0]-1,self.board_dim[0]);
-		v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.board_dim[1]);
-
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[7]=1.0;
-		}else{
-		    nn_data[7]=0.0;
-		}
-
-
-		v[0]=(self.npc_pos[n][0]+0)%self.board_dim[0];
-		v[1]=(self.npc_pos[n][1]+1)%self.board_dim[1];
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[8]=1.0;
-		}else{
-		    nn_data[8]=0.0;
-		}
-
-
-		v[0]=(self.npc_pos[n][0]+0)%self.board_dim[0];
-		v[1]=App::brute_modulo(self.npc_pos[n][1]-1,self.board_dim[1]);
-		if self.board_pop[v[0] as usize][v[1] as usize] !=0.0{
-		    nn_data[9]=1.0;
-		}else{
-		    nn_data[9]=0.0;
-		}
-
-		nn_data[10]=0.0;
-		nn_data[11]=0.0;
-		nn_data[12]=0.0;
-		nn_data[13]=0.0;
-		nn_data[14]=0.0;
-		nn_data[15]=0.0;
-		nn_data[16]=0.0;
-		nn_data[17]=0.0;
-
-		nn_data[self.npc_dir_idx[n] +10]=1.0;
-
-	    
-		nn_data[19]=0.0;
-		nn_data[20]=0.0;
-		nn_data[21]=0.0;
-		nn_data[22]=0.0;
-		nn_data[23]=0.0;
-		nn_data[24]=0.0;
-		nn_data[25]=0.0;
-		nn_data[26]=0.0;
-
-		nn_data[self.npc_dir_idx[target_idx] +19]=1.0;
-
-	        nn_data[27] = self.npc_hp[n] as f32;
-	    nn_data[28] = self.npc_hp[target_idx] as f32;
-
-	    nn_data[29] = self.old_output[n][0];
-	    nn_data[30] = self.old_output[n][1];
-	    nn_data[31] = self.old_output[n][2];
-	    nn_data[32] = self.old_output[n][3];
-	    nn_data[33] = self.old_output[n][4];
-	    nn_data[34] = self.old_output[n][5];
-	    nn_data[35] = self.old_output[n][6];
-	    nn_data[36] = self.old_output[n][7];
-	    nn_data[37] = self.old_output[n][8];
-	    nn_data[38] = self.old_output[n][9];
-	    nn_data[39] = self.old_output[n][10];
-		//START FEED FORWARD
-
-	    //====================================================================
-		for layer in self.npc_NN[n].clone(){
-		    nn_data=self.feed_forward(layer,nn_data);
-		    nn_data=App::relu(nn_data)
-		}
-
-	    
-	    
-		nn_out_argmax=9;
-		move_flag=false;
-		for m in 0..nn_data.len() as usize{
-		    if nn_data[m]>=nn_data[nn_out_argmax] && nn_data[m]>0.0{
-			nn_out_argmax=m;
-			move_flag=true;
+		for n in self.arenas[a].clone(){//loop through all npcs
+		    for n in self.arenas[a].clone(){
+			self.board_pop[self.npc_pos[n][0] as usize][self.npc_pos[n][1] as usize]=1.0;
 		    }
-		   self.old_output[n][m]=nn_data[m];
-		}
-	    
-	    //====================================================================
-		if move_flag{
-            if nn_out_argmax==9{
-                //turn counter clock wise
-                self.npc_dir_idx[n]+=1;
-                self.npc_dir_idx[n]%=7;
-                self.npc_dir[n][0]=turn_list[self.npc_dir_idx[n]][0];
-                self.npc_dir[n][1]=turn_list[self.npc_dir_idx[n]][1];
-
-            }else if nn_out_argmax==8{
-                //turn clockwise
-                if self.npc_dir_idx[n]==0 {
-                    self.npc_dir_idx[n]=7;
-                }else{
-                    self.npc_dir_idx[n]-=1;
-                }
-                self.npc_dir[n][0]=turn_list[self.npc_dir_idx[n]][0];
-                self.npc_dir[n][1]=turn_list[self.npc_dir_idx[n]][1]; 
-            }
-
-            if nn_out_argmax==0{
-                self.npc_pos[n][0]+=1;
-                self.npc_pos[n][1]+=0;
-            }else if nn_out_argmax==1{
-                self.npc_pos[n][0]+=1;
-                self.npc_pos[n][1]+=1;
-
-            }else if nn_out_argmax==2{
-                self.npc_pos[n][0]+=1;
-                self.npc_pos[n][1]+=-1;
-
-            }else if nn_out_argmax==3{
-                self.npc_pos[n][0]+=0;
-                self.npc_pos[n][1]+=1;
-
-            }else if nn_out_argmax==4{
-                self.npc_pos[n][0]+=0;
-                self.npc_pos[n][1]+=-1;
-
-            }else if nn_out_argmax==5{
-                self.npc_pos[n][0]+=-1;
-                self.npc_pos[n][1]+=1;
-
-            }else if nn_out_argmax==6{
-                self.npc_pos[n][0]+=-1;
-                self.npc_pos[n][1]+=0;
-
-            }else if nn_out_argmax==7{
-                self.npc_pos[n][0]+=-1;
-                self.npc_pos[n][1]+=-1;
-
-            }
-
-            if nn_out_argmax==10{
-		self.npc_max_acc[n]=(20-self.armor_AC[self.npc_armor_idx[n]])/2;
-                self.npc_speed[n][self.npc_dir_idx[n]]+= self.npc_max_acc[n];
-            }
-		}
-		for k in 0..7{
-		    self.npc_pos[n][0]+=turn_list[k][0]*self.npc_speed[n][k];
-		    self.npc_pos[n][1]+=turn_list[k][1]*self.npc_speed[n][k];
-		    if self.npc_speed[n][k]>0{
-			self.npc_speed[n][k]-=1;
+		    bounce_flag=false;
+		    //==================================Check Bounce
+		    arg_min_dist=0;
+		    min_dist=10000.0;
+		    for m in self.arenas[a].clone(){
+			dist=((self.npc_pos[m][0]-self.npc_pos[n][0]).pow(2) +
+				    (self.npc_pos[m][1]-self.npc_pos[n][1]).pow(2)) as f32;
+				if dist<min_dist && m != n{
+					min_dist=dist;
+					arg_min_dist=m;
+				}
+			if(dist==0.0 && m != n){
+			    bounce_flag=true;
+				break;
+			}
 		    }
-		}
 
-		
-		if bounce_flag{
-		    //self.counter=((self.counter+self.seed)%7919);
-                    self.npc_pos[n][0]+=rng.gen_range(-1..1);
-		    self.npc_hp[n]-=1;
-                    //self.counter=((self.counter+self.seed)%7919);
-                    self.npc_pos[n][1]+=rng.gen_range(-1..1);
-		}
-		if self.npc_pos[n][0]>=self.board_dim[0]-1{
-		    self.npc_pos[n][0]=self.board_dim[0]-2;
-		}
-		if self.npc_pos[n][0]<1{
-		    self.npc_pos[n][0]=2;
-		}
-		if self.npc_pos[n][1]>=self.board_dim[1]-1{
-		    self.npc_pos[n][1]=self.board_dim[1]-2;
-		}
-		if self.npc_pos[n][1]<1{
-		    self.npc_pos[n][1]=2;
-		}
-                dist=(self.npc_pos[n][0]-target_pos[0]).pow(2)+
-                    (self.npc_pos[n][1]-target_pos[1]).pow(2);
+		    if self.npc_hp[n]>0{
+			nn_data = self.pass_to_NN(n);
+			old_data=nn_data.clone();
+			nn_data = self.pass_to_Q(n,nn_data);
+		    
+			nn_out_argmax=9;
+			move_flag=false;
+			for m in 0..nn_data.len() as usize{
+			    if nn_data[m]>=nn_data[nn_out_argmax] && nn_data[m]>0.0{
+				nn_out_argmax=m;
+				move_flag=true;
+			    }
+			    self.old_output[n][m]=nn_data[m];//old output for feeding back in
+			}
 
-	        //println!("CALLING ATTACK FUNCTION");
-	        self.attack(n,target_idx);
-                self.npc_ticks_alive[n]+=1;
 
-		if self.npc_ticks_alive[n]>100{
-		    self.npc_hp[n]-=1;
+			//====================================================================
+			//PERFORM ACTION IN THE ENVIROMENT
+			if move_flag{
+			    if nn_out_argmax==9{
+				//turn counter clock wise
+				self.npc_dir_idx[n]+=1;
+				self.npc_dir_idx[n]%=7;
+				self.npc_dir[n][0]=turn_list[self.npc_dir_idx[n]][0];
+				self.npc_dir[n][1]=turn_list[self.npc_dir_idx[n]][1];
+
+			    }else if nn_out_argmax==8{
+				//turn clockwise
+				if self.npc_dir_idx[n]==0 {
+				    self.npc_dir_idx[n]=7;
+				}else{
+				    self.npc_dir_idx[n]-=1;
+				}
+				self.npc_dir[n][0]=turn_list[self.npc_dir_idx[n]][0];
+				self.npc_dir[n][1]=turn_list[self.npc_dir_idx[n]][1]; 
+			    }
+
+			    if nn_out_argmax==0{
+				self.npc_pos[n][0]+=1;
+				self.npc_pos[n][1]+=0;
+			    }else if nn_out_argmax==1{
+				self.npc_pos[n][0]+=1;
+				self.npc_pos[n][1]+=1;
+
+			    }else if nn_out_argmax==2{
+				self.npc_pos[n][0]+=1;
+				self.npc_pos[n][1]+=-1;
+
+			    }else if nn_out_argmax==3{
+				self.npc_pos[n][0]+=0;
+				self.npc_pos[n][1]+=1;
+
+			    }else if nn_out_argmax==4{
+				self.npc_pos[n][0]+=0;
+				self.npc_pos[n][1]+=-1;
+
+			    }else if nn_out_argmax==5{
+				self.npc_pos[n][0]+=-1;
+				self.npc_pos[n][1]+=1;
+
+			    }else if nn_out_argmax==6{
+				self.npc_pos[n][0]+=-1;
+				self.npc_pos[n][1]+=0;
+
+			    }else if nn_out_argmax==7{
+				self.npc_pos[n][0]+=-1;
+				self.npc_pos[n][1]+=-1;
+
+			    }
+
+			    if nn_out_argmax==10{
+				self.npc_max_acc[n]=(20-self.armor_AC[self.npc_armor_idx[n]])/2;
+				self.npc_speed[n][self.npc_dir_idx[n]]+= self.npc_max_acc[n];
+			    }
+			}
+			for k in 0..7{
+			    self.npc_pos[n][0]+=turn_list[k][0]*self.npc_speed[n][k];
+			    self.npc_pos[n][1]+=turn_list[k][1]*self.npc_speed[n][k];
+			    if self.npc_speed[n][k]>0{
+				self.npc_speed[n][k]-=1;
+			    }
+			}
+
+
+			if bounce_flag{
+			    //self.counter=((self.counter+self.seed)%7919);
+			    self.npc_pos[n][0]+=rng.gen_range(-1..1);
+			    self.npc_hp[n]-=1;
+			    //self.counter=((self.counter+self.seed)%7919);
+			    self.npc_pos[n][1]+=rng.gen_range(-1..1);
+			}
+			if self.npc_pos[n][0]>=self.board_dim[0]-1{
+			    self.npc_pos[n][0]=self.board_dim[0]-2;
+			}
+			if self.npc_pos[n][0]<1{
+			    self.npc_pos[n][0]=2;
+			}
+			if self.npc_pos[n][1]>=self.board_dim[1]-1{
+			    self.npc_pos[n][1]=self.board_dim[1]-2;
+			}
+			if self.npc_pos[n][1]<1{
+			    self.npc_pos[n][1]=2;
+			}
+			dist=((self.npc_pos[n][0]-target_pos[0]).pow(2)+
+			    (self.npc_pos[n][1]-target_pos[1]).pow(2))as f32;
+
+			//println!("CALLING ATTACK FUNCTION");
+			self.attack(n,target_idx);
+			    self.npc_ticks_alive[n]+=1;
+			//================================================
+			//Give Rewards based on distance
+			new_min_dist=10000.0;
+			for m in self.arenas[a].clone(){
+			    dist=(self.npc_pos[m][0]-self.npc_pos[n][0]).pow(2) as f32+
+					(self.npc_pos[m][1]-self.npc_pos[n][1]).pow(2) as f32;
+				    if dist<new_min_dist && m != n{
+					    new_min_dist=dist;
+				    } 
+			}
+			if new_min_dist<min_dist{
+			    self.reward(n,1.0);
+			}	
+			    //==================================================================================
+			    //FEED NEW STATE INTO NEURAL NETWORK AND UPDATE Q-LEARNING ALGO
+			//==================================================================================
+			//reset board positions
+			 for n in self.arenas[a].clone(){
+			     self.board_pop[self.npc_pos[n][0] as usize][self.npc_pos[n][1] as usize]=1.0;
+			 }
+			//collect action and state indicies for Q-Table update
+			action_idx=nn_out_argmax.clone();
+			old_argmax=0;
+			for m in 0..old_data.len() as usize{
+			    if old_data[m]>=old_data[old_argmax]{
+				
+				old_argmax=m;	
+			    }
+			}
+			
+			nn_data=self.pass_to_NN(n);
+			nn_data=self.pass_to_Q(n,nn_data);
+			nn_out_argmax=9;
+
+			for m in 0..nn_data.len() as usize{
+			    if nn_data[m]>=nn_data[nn_out_argmax]{
+				nn_out_argmax=m;	
+			    }
+			}
+			self.update_reward_table(n,//npc index
+						 old_argmax,//old argmax from initial Neural Net Pass
+						 nn_out_argmax,//new argmax from new Neural Net Pass
+						 action_idx);//Action index, i.e. the output from the Q-Table
+
+			if self.npc_ticks_alive[n]>100{
+			    self.npc_hp[n]-=1;
+			}
 		}
-            }
-        }//MAIN LOOP
-        }//arena Loop
+	    }//MAIN LOOP
+	    }//arena Loop
         }else if self.tycoon_mode{
 	    self.tycoon_tick();
 	}//if sim mode vs tycoon mode
